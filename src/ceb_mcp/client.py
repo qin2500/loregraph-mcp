@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import httpx
 
-_TIMEOUT = 60.0
+_TIMEOUT = 90.0
+# /v1/answer can run a slow LLM and ride right up against Cloudflare's own 100s edge timeout
+# (524) for tunnel-fronted origins — give it more rope than our default so we see the 524
+# ourselves instead of timing out client-side first and masking it.
+_ANSWER_TIMEOUT = 110.0
 
 
 class CebClient:
@@ -21,11 +25,17 @@ class CebClient:
 
     @staticmethod
     async def _check(response: httpx.Response) -> dict:
+        if response.status_code == 524:
+            raise RuntimeError(
+                "524: Cloudflare edge timeout (backend took over 100s to respond). "
+                "This happens occasionally on /v1/answer with the current LLM — retry, "
+                "or use /v1/retrieve if you don't need a synthesized answer."
+            )
         if response.is_error:
             try:
                 detail = response.json().get("detail", response.text)
             except ValueError:
-                detail = response.text
+                detail = response.text[:500]
             raise RuntimeError(f"{response.status_code}: {detail}")
         return response.json()
 
@@ -42,7 +52,9 @@ class CebClient:
 
     async def answer(self, question: str, k: int = 8) -> dict:
         return await self._check(
-            await self._http.post("/v1/answer", json={"question": question, "k": k})
+            await self._http.post(
+                "/v1/answer", json={"question": question, "k": k}, timeout=_ANSWER_TIMEOUT
+            )
         )
 
     async def list_episodes(self, offset: int = 0, limit: int = 100) -> dict:

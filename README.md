@@ -62,15 +62,23 @@ Swap the port if you chose a different one at startup.
 
 ## Tools exposed
 
-| Tool | Maps to | Notes |
-|---|---|---|
-| `retrieve(query, k=8)` | `POST /v1/retrieve` | Plain search, no LLM. Excludes captures still queued/processing. |
-| `answer(question, k=8)` | `POST /v1/answer` | Same retrieval, plus an LLM-synthesized answer. |
-| `list_episodes(offset=0, limit=100)` | `GET /v1/episodes` | Paginated; `limit` capped at 500 server-side. |
-| `get_episode(episode_id)` | `GET /v1/episodes/{id}` | 404 if not found or not yours. |
-| `capture(text)` | `POST /v1/capture` + polls `GET /v1/capture/{job_id}` | Blocks up to ~60s until ingestion is `done`, so a successful result is actually searchable. Returns the honest `queued`/`processing` status if it's still running past that budget — never claims "done" prematurely. |
+Each tool's docstring in `server.py` tells the calling model when to reach for it vs. the
+others (that's what an MCP client actually sees, not this table) — this is just a quick
+reference for a human reader.
+
+| Tool | Maps to | When it's used | Notes |
+|---|---|---|---|
+| `retrieve(query, k=8)` | `POST /v1/retrieve` | The default, go-to search — "what do I know about X". | No LLM call, fast. Excludes captures still queued/processing. `query`: 1-4000 chars. `k`: 1-50, default 8. |
+| `list_episodes(offset=0, limit=100)` | `GET /v1/episodes` | Browsing everything captured, not a targeted search. | Paginated; `limit` capped at 500 server-side. |
+| `get_episode(episode_id)` | `GET /v1/episodes/{id}` | Fetching full detail once you already have an id (from `retrieve`/`list_episodes`/`capture`). | 404 if not found or not yours. |
+| `capture(text)` | `POST /v1/capture` + polls `GET /v1/capture/{job_id}` | Saving a new note — the write counterpart to `retrieve`. | `text`: 1-20,000 chars. Blocks up to ~5 min until ingestion is `done` (extraction against the home LLM box is genuinely this slow), so a successful result is actually searchable via `retrieve` right after. Returns the honest `queued`/`processing` status if it's still running past that budget — never claims "done" prematurely. |
 
 `GET /v1/me` is used only internally as the startup auth check, not exposed as a tool.
+
+`answer` (`POST /v1/answer`) is disabled for now — `retrieve` covers the vast majority of use
+cases and doesn't risk the Cloudflare edge timeout `answer` can hit under the current slow LLM.
+`CebClient.answer()` still exists in `client.py`; re-enable by adding a `@mcp.tool()` wrapper
+back in `server.py`.
 
 ## Config
 
