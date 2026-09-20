@@ -16,6 +16,12 @@ pip install -e .
 This registers a `ceb-mcp` console command (see the `[project.scripts]` entry in
 `pyproject.toml`).
 
+The `-e` (editable) install is deliberate: it makes `site-packages` point straight at this
+repo instead of copying it, so **don't delete the clone after installing** — it's what
+`ceb-mcp` actually runs. The upside: editing the source and restarting `ceb-mcp` (no
+reinstall) is enough to pick up changes, which is handy since this is a tool you're likely to
+keep tweaking. If you'd rather the repo be disposable, drop the `-e`.
+
 ## First run
 
 ```
