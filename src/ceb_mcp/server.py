@@ -2,17 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import anyio
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from .client import CebClient
-
-# ponytail: fixed poll cadence/budget rather than adaptive backoff. Bumped after real e2e
-# testing showed extraction against the home LLM box commonly takes minutes, not seconds —
-# revisit (e.g. adaptive backoff, or a separate "poll status" tool) if 5 min still isn't enough.
-_CAPTURE_POLL_INTERVAL_S = 3.0
-_CAPTURE_POLL_BUDGET_S = 300.0
 
 
 def build_server(client: CebClient) -> MCPServer:
@@ -102,25 +95,32 @@ def build_server(client: CebClient) -> MCPServer:
         """Save a new note into this person's personal knowledge graph.
 
         Use this whenever the user wants something remembered/logged/saved for later — the
-        write counterpart to `retrieve`. Note this is slow: it waits (up to ~5 minutes —
-        extraction against the backend's LLM genuinely takes that long) for ingestion to
-        finish so a "done" result is actually searchable via `retrieve` right after. Warn the
-        user this may take a while rather than going silent.
+        write counterpart to `retrieve`. This returns immediately with a job_id and status
+        "queued" — it does NOT wait for ingestion to finish. Extraction against the backend's
+        LLM can take minutes, so the note is accepted but not yet searchable via `retrieve`.
 
-        If ingestion is still running past that budget, this returns the last known status
-        honestly (status "queued" or "processing") instead of claiming the note is done — in
-        that case tell the user it's still processing and that `retrieve` may not find it
-        yet; don't retry `capture` itself, the note was already accepted. Media attachments
-        are not supported yet — the backend has no presigned-upload endpoint for them, so
-        only plain text can be captured.
+        Tell the user it's queued and may take a few minutes, then move on — don't block
+        waiting on it. Use `capture_status` later (e.g. if the user asks) to check progress;
+        don't retry `capture` itself, the note was already accepted. Media attachments are
+        not supported yet — the backend has no presigned-upload endpoint for them, so only
+        plain text can be captured.
         """
-        status = await client.capture_start(text)
-        job_id = status["job_id"]
-        elapsed = 0.0
-        while status["status"] not in ("done", "failed") and elapsed < _CAPTURE_POLL_BUDGET_S:
-            await anyio.sleep(_CAPTURE_POLL_INTERVAL_S)
-            elapsed += _CAPTURE_POLL_INTERVAL_S
-            status = await client.capture_status(job_id)
-        return status
+        return await client.capture_start(text)
+
+    @mcp.tool()
+    async def capture_status(
+        job_id: Annotated[
+            str,
+            Field(description="The job_id returned by a prior `capture` call."),
+        ],
+    ) -> dict:
+        """Check on a note's ingestion progress after a prior `capture` call.
+
+        Returns the job's current status: "queued", "processing", "done" (with episode_ids),
+        or "failed". Only call this if the user asks about a pending capture's progress —
+        don't poll it in a loop waiting for "done"; that reintroduces the blocking behavior
+        `capture` deliberately avoids. Once status is "done", `retrieve` will find the note.
+        """
+        return await client.capture_status(job_id)
 
     return mcp

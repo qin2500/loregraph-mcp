@@ -1,4 +1,4 @@
-"""Self-check for the capture tool's poll-until-done/timeout logic. Run directly:
+"""Self-check for the non-blocking capture / capture_status tools. Run directly:
 python tests/test_capture_poll.py
 """
 
@@ -28,7 +28,7 @@ class FakeClient:
         return self._statuses[0]
 
 
-async def test_polls_until_done() -> None:
+async def test_capture_returns_immediately_without_polling() -> None:
     fake = FakeClient(
         [
             {"job_id": "1", "status": "queued"},
@@ -36,29 +36,31 @@ async def test_polls_until_done() -> None:
             {"job_id": "1", "status": "done", "episode_ids": ["e1"]},
         ]
     )
-    server_mod._CAPTURE_POLL_INTERVAL_S = 0  # no need to actually wait in a test
     mcp = server_mod.build_server(fake)  # type: ignore[arg-type]
     result = await mcp.call_tool("capture", {"text": "hello"})
+    assert not result.is_error, result.content
+    payload = json.loads(result.content[0].text)
+    assert payload["status"] == "queued", payload  # first status, no polling happened
+
+
+async def test_capture_status_checks_progress() -> None:
+    fake = FakeClient(
+        [
+            {"job_id": "1", "status": "processing"},
+            {"job_id": "1", "status": "done", "episode_ids": ["e1"]},
+        ]
+    )
+    mcp = server_mod.build_server(fake)  # type: ignore[arg-type]
+    result = await mcp.call_tool("capture_status", {"job_id": "1"})
     assert not result.is_error, result.content
     payload = json.loads(result.content[0].text)
     assert payload["status"] == "done", payload
     assert payload["episode_ids"] == ["e1"], payload
 
 
-async def test_gives_up_honestly_after_budget() -> None:
-    fake = FakeClient([{"job_id": "1", "status": "processing"}])
-    server_mod._CAPTURE_POLL_INTERVAL_S = 0
-    server_mod._CAPTURE_POLL_BUDGET_S = 0  # give up immediately
-    mcp = server_mod.build_server(fake)  # type: ignore[arg-type]
-    result = await mcp.call_tool("capture", {"text": "hello"})
-    assert not result.is_error, result.content
-    payload = json.loads(result.content[0].text)
-    assert payload["status"] == "processing", payload
-
-
 async def main() -> None:
-    await test_polls_until_done()
-    await test_gives_up_honestly_after_budget()
+    await test_capture_returns_immediately_without_polling()
+    await test_capture_status_checks_progress()
     print("ok")
 
 
